@@ -19,31 +19,42 @@ MAIN_C = r"""
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
 #include "get_next_line.h"
 
 int main(int argc, char **argv)
 {
     int fd;
     char *line;
+    int should_close = 1;
 
     if (argc != 2)
     {
-        const char msg[] = "usage: ./gnl_test <file>\n";
+        const char msg[] = "usage: ./gnl_test <file|stdin>\n";
         write(2, msg, sizeof(msg) - 1);
         return 2;
     }
-    fd = open(argv[1], O_RDONLY);
-    if (fd < 0)
+    if (strcmp(argv[1], "stdin") == 0 || strcmp(argv[1], "0") == 0)
     {
-        perror("open");
-        return 1;
+        fd = 0;
+        should_close = 0;
+    }
+    else
+    {
+        fd = open(argv[1], O_RDONLY);
+        if (fd < 0)
+        {
+            perror("open");
+            return 1;
+        }
     }
     while ((line = get_next_line(fd)) != NULL)
     {
         write(1, line, ft_strlen(line));
         free(line);
     }
-    close(fd);
+    if (should_close)
+        close(fd);
     return 0;
 }
 """
@@ -110,6 +121,16 @@ def build_test_cases(tmp_dir: Path):
     return cases
 
 
+def build_stdin_test_cases():
+    stdin_cases = []
+    stdin_cases.append(("stdin_empty", ""))
+    stdin_cases.append(("stdin_single_line", "hello from stdin\n"))
+    stdin_cases.append(("stdin_multiple_lines", "line1\nline2\nline3\n"))
+    stdin_cases.append(("stdin_no_newline", "no newline at end"))
+    stdin_cases.append(("stdin_long_line", "x" * 5000 + "\n"))
+    return stdin_cases
+
+
 def main():
     script_dir = Path(__file__).resolve().parent
     project_root = script_dir.parent
@@ -126,6 +147,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         cases = build_test_cases(tmp_dir)
+        stdin_cases = build_stdin_test_cases()
 
         for bs in buffer_sizes:
             try:
@@ -151,6 +173,29 @@ def main():
                 if actual != exp:
                     print(f"{RED}[Ko ]{RESET} [BUFFER_SIZE={bs}] {name}: mismatch")
                     print(f"Expected length: {len(exp)} | Got length: {len(out)}")
+                    ok = False
+                else:
+                    print(f"{GREEN}[Ok]{RESET} [BUFFER_SIZE={bs}] {name}")
+
+            # Test stdin (fd 0)
+            for name, content in stdin_cases:
+                result = subprocess.run(
+                    [str(runner), "stdin"],
+                    input=content,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print(f"{RED}[Ko ]{RESET} [BUFFER_SIZE={bs}] {name}: runtime error")
+                    if result.stderr.strip():
+                        print(result.stderr.strip())
+                    ok = False
+                    continue
+
+                if result.stdout != content:
+                    print(f"{RED}[Ko ]{RESET} [BUFFER_SIZE={bs}] {name}: mismatch")
+                    print(f"Expected length: {len(content)} | Got length: {len(result.stdout)}")
                     ok = False
                 else:
                     print(f"{GREEN}[Ok]{RESET} [BUFFER_SIZE={bs}] {name}")
